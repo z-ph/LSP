@@ -1,0 +1,6 @@
+{
+  "name": "Link State Routing Simulator",
+  "description": "Simulation and visualization of Link State Routing Protocol with Dijkstra ECMP, delay, and packet loss.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
