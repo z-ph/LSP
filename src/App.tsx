@@ -5,6 +5,7 @@ import { Play, Pause, Save, Upload, Activity, Clock, Server, Settings2, Link2, P
 import { PhysicalNode, PhysicalLink } from './simulation/types';
 import { useLanguage } from './i18n/LanguageContext';
 import { HelpModal } from './components/HelpModal';
+import { ContextMenu, buildNodeMenu, buildBackgroundMenu, buildLinkMenu, MenuItemType } from './components/ContextMenu';
 
 const INITIAL_NODES: PhysicalNode[] = [
   { id: '1', label: 'R1', x: 200, y: 300 },
@@ -33,6 +34,15 @@ export default function App() {
   const [newLinkMode, setNewLinkMode] = useState<{ active: boolean, source?: string }>({ active: false });
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [dataDestId, setDataDestId] = useState<string>('');
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    type: 'node' | 'background' | 'link';
+    targetId?: string;
+    graphX?: number;
+    graphY?: number;
+  }>({ visible: false, x: 0, y: 0, type: 'background' });
 
   // Init default
   useEffect(() => {
@@ -90,6 +100,73 @@ export default function App() {
   const handleLinkClick = (id: string) => {
     setSelectedLinkId(id);
     if (id) setSelectedNodeIds([]);
+  };
+
+  const handleNodeContextMenu = (id: string, x: number, y: number) => {
+    setContextMenu({ visible: true, x, y, type: 'node', targetId: id });
+  };
+
+  const handleBackgroundContextMenu = (screenX: number, screenY: number, graphX: number, graphY: number) => {
+    setContextMenu({ visible: true, x: screenX, y: screenY, type: 'background', graphX, graphY });
+  };
+
+  const handleLinkContextMenu = (id: string, x: number, y: number) => {
+    setContextMenu({ visible: true, x, y, type: 'link', targetId: id });
+  };
+
+  const handleCloseContextMenu = () => {
+    setContextMenu(prev => ({ ...prev, visible: false }));
+  };
+
+  const handleMenuAction = (type: MenuItemType) => {
+    const targetId = contextMenu.targetId;
+
+    switch (type) {
+      case 'triggerLSP':
+        if (targetId) sim.triggerLSP(targetId);
+        break;
+      case 'deleteNode':
+        if (targetId) {
+          sim.removeNode(targetId);
+          setSelectedNodeIds(prev => prev.filter(id => id !== targetId));
+        }
+        break;
+      case 'clearRoutingTable':
+        if (targetId) sim.clearRoutingTable([targetId]);
+        break;
+      case 'sendTestData':
+        if (targetId) {
+          setSelectedNodeIds([targetId]);
+          if (dataDestId) {
+            sim.sendDataPacket(targetId, dataDestId);
+          }
+        }
+        break;
+      case 'addLink':
+        if (targetId) {
+          setNewLinkMode({ active: true, source: targetId });
+        }
+        break;
+      case 'addNode':
+        const addX = contextMenu.graphX ?? Math.random() * 200 + 100;
+        const addY = contextMenu.graphY ?? Math.random() * 200 + 100;
+        sim.addNode({ label: `R${sim.nodes.length + 1}`, x: addX, y: addY });
+        break;
+      case 'triggerAllLSP':
+        sim.nodes.forEach(n => sim.triggerLSP(n.id));
+        break;
+      case 'clearAllRoutingTables':
+        sim.clearRoutingTable();
+        break;
+      case 'deleteLink':
+        if (targetId) {
+          sim.removeLink(targetId);
+          setSelectedLinkId('');
+        }
+        break;
+    }
+
+    setContextMenu(prev => ({ ...prev, visible: false }));
   };
 
   const selectedNode = selectedNodeIds.length === 1 ? sim.nodes.find(n => n.id === selectedNodeIds[0]) : null;
@@ -197,6 +274,9 @@ export default function App() {
                 setSelectedNodeIds(ids);
                 setSelectedLinkId('');
              }}
+             onNodeContextMenu={handleNodeContextMenu}
+             onBackgroundContextMenu={handleBackgroundContextMenu}
+             onLinkContextMenu={handleLinkContextMenu}
            />
            
            {/* Floating Tools */}
@@ -218,21 +298,15 @@ export default function App() {
                  <Link2 className="w-4 h-4" /> {newLinkMode.active ? (newLinkMode.source ? t.selectTarget : t.selectSource) : t.addLink}
               </button>
               
-              <button 
-                onClick={() => {
-                   if (selectedNodeIds.length > 0) {
-                      selectedNodeIds.forEach(id => sim.triggerLSP(id));
-                   } else {
-                      sim.nodes.forEach(n => sim.triggerLSP(n.id));
-                   }
-                }}
-                className="flex items-center gap-2 px-3 py-2 hover:bg-green-50 text-slate-700 hover:text-green-600 rounded transition font-medium text-sm"
-              >
-                 <Activity className="w-4 h-4" /> 
-                 {selectedNodeIds.length > 0 
-                     ? (language === 'zh' ? `触发 LSP (${selectedNodeIds.length})` : `Trigger LSP (${selectedNodeIds.length})`)
-                     : (language === 'zh' ? '全网触发 LSP' : 'Trigger All LSPs')}
-              </button>
+               <button 
+                 onClick={() => {
+                    sim.nodes.forEach(n => sim.triggerLSP(n.id));
+                 }}
+                 className="flex items-center gap-2 px-3 py-2 hover:bg-green-50 text-slate-700 hover:text-green-600 rounded transition font-medium text-sm"
+               >
+                  <Activity className="w-4 h-4" /> 
+                  {language === 'zh' ? '全网触发 LSP' : 'Trigger All LSPs'}
+               </button>
 
               <button 
                 onClick={() => {
@@ -254,14 +328,14 @@ export default function App() {
 
       {/* Right Sidebar */}
       <div className="w-80 bg-white border-l shadow-xl flex flex-col overflow-hidden z-20">
-         <div className="p-4 border-b bg-slate-50 flex items-center gap-2">
+         <div className="py-1.5 px-3 border-b bg-slate-50 flex items-center gap-2">
             <Settings2 className="w-5 h-5 text-slate-600" />
-            <h2 className="font-semibold">{t.simulationSettings}</h2>
+            <h2 className="font-semibold text-sm">{t.simulationSettings}</h2>
          </div>
          
-          <div className="p-4 border-b space-y-4">
+          <div className="py-2 px-3 border-b space-y-1.5">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">{t.baseDelay}</label>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-0.5 block">{t.baseDelay}</label>
               <input 
                 type="range" min="10" max="3000" step="10"
                 value={sim.config.baseDelayMs || 200}
@@ -272,7 +346,7 @@ export default function App() {
             </div>
             
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">{t.packetLoss}</label>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-0.5 block">{t.packetLoss}</label>
               <input 
                 type="range" min="0" max="1" step="0.01"
                 value={sim.config.packetLossRatio ?? 0}
@@ -282,7 +356,7 @@ export default function App() {
               <div className="text-right text-sm text-slate-600">{(sim.config.packetLossRatio * 100).toFixed(0)}%</div>
             </div>
 
-            <label className="flex items-center gap-2 cursor-pointer mt-2 text-sm text-slate-700">
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
                <input 
                  type="checkbox" 
                  checked={sim.config.autoTriggerLspOnLinkChange ?? false}
@@ -293,42 +367,42 @@ export default function App() {
          </div>
 
          <div className="flex-1 overflow-y-auto bg-slate-50">
-            {selectedNodeIds.length > 1 ? (
-               <div key="multiple-nodes" className="p-4 animate-in fade-in slide-in-from-right-4">
-                  <h3 className="font-bold text-lg flex items-center gap-2 mb-4">
-                    <Server className="w-5 h-5 text-blue-500" />
-                    {language === 'zh' ? `已选择 ${selectedNodeIds.length} 个节点` : `${selectedNodeIds.length} Nodes Selected`}
-                  </h3>
-                  
-                  <button 
-                     onClick={() => selectedNodeIds.forEach(id => sim.triggerLSP(id))}
-                     className="w-full mb-4 px-3 py-2 bg-blue-50 text-blue-600 rounded-md font-medium text-sm hover:bg-blue-100 transition"
-                  >
+             {selectedNodeIds.length > 1 ? (
+                <div key="multiple-nodes" className="py-2 px-3 animate-in fade-in slide-in-from-right-4">
+                   <h3 className="font-bold text-base flex items-center gap-2 mb-1">
+                     <Server className="w-5 h-5 text-blue-500" />
+                     {language === 'zh' ? `已选择 ${selectedNodeIds.length} 个节点` : `${selectedNodeIds.length} Nodes Selected`}
+                   </h3>
+                   
+                   <button 
+                      onClick={() => selectedNodeIds.forEach(id => sim.triggerLSP(id))}
+                      className="w-full mb-1 px-2 py-1.5 bg-blue-50 text-blue-600 rounded-md font-medium text-sm hover:bg-blue-100 transition"
+                   >
                      {language === 'zh' ? '为选中节点触发LSP' : 'Trigger LSP for Selected'}
                   </button>
 
-                  <button 
-                     onClick={() => sim.clearRoutingTable(selectedNodeIds)}
-                     className="w-full mb-4 px-3 py-2 bg-slate-100 text-slate-700 hover:text-slate-900 rounded-md font-medium text-sm hover:bg-slate-200 transition flex items-center justify-center gap-2"
-                  >
-                     <Eraser className="w-4 h-4" />
-                     {language === 'zh' ? '清空选中节点路由表' : 'Clear Routing Table for Selected'}
-                  </button>
+                   <button 
+                      onClick={() => sim.clearRoutingTable(selectedNodeIds)}
+                      className="w-full mb-1 px-2 py-1.5 bg-slate-100 text-slate-700 hover:text-slate-900 rounded-md font-medium text-sm hover:bg-slate-200 transition flex items-center justify-center gap-2"
+                   >
+                      <Eraser className="w-4 h-4" />
+                      {language === 'zh' ? '清空选中节点路由表' : 'Clear Routing Table for Selected'}
+                   </button>
 
-                  <button 
-                     onClick={() => {
-                         selectedNodeIds.forEach(id => sim.removeNode(id));
-                         setSelectedNodeIds([]);
-                     }}
-                     className="w-full mb-4 px-3 py-2 bg-red-100 text-red-700 rounded-md font-medium text-sm hover:bg-red-200 transition flex items-center justify-center gap-2"
-                  >
-                     <Eraser className="w-4 h-4" />
-                     {language === 'zh' ? '删除所选节点' : 'Delete Selected Nodes'}
-                  </button>
-                  
-                  <div className="mt-4 p-3 bg-white rounded border">
-                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">{language === 'zh' ? '定时触发 LSP' : 'Timer Trigger LSP'}</h4>
-                     <label className="flex items-center gap-2 cursor-pointer text-sm mb-2">
+                   <button 
+                      onClick={() => {
+                          selectedNodeIds.forEach(id => sim.removeNode(id));
+                          setSelectedNodeIds([]);
+                      }}
+                      className="w-full mb-1 px-2 py-1.5 bg-red-100 text-red-700 rounded-md font-medium text-sm hover:bg-red-200 transition flex items-center justify-center gap-2"
+                   >
+                      <Eraser className="w-4 h-4" />
+                      {language === 'zh' ? '删除所选节点' : 'Delete Selected Nodes'}
+                   </button>
+                   
+                   <div className="mt-1 p-1.5 bg-white rounded border">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">{language === 'zh' ? '定时触发 LSP' : 'Timer Trigger LSP'}</h4>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm mb-1">
                         <input 
                           type="checkbox"
                           onChange={e => {
@@ -355,7 +429,7 @@ export default function App() {
                         />
                         {language === 'zh' ? '开启定时触发' : 'Enable auto-timer'}
                      </label>
-                     <div className="flex items-center gap-2 mt-2">
+                      <div className="flex items-center gap-2 mt-1">
                         <span className="text-xs text-slate-500">{language === 'zh' ? '间隔 (ms):' : 'Interval (ms):'}</span>
                         <input 
                           type="number" min="100" step="100"
@@ -377,45 +451,45 @@ export default function App() {
                      </div>
                   </div>
                </div>
-            ) : selectedNode && selectedNodeState ? (
-               <div key={`node-${selectedNode.id}`} className="p-4 animate-in fade-in slide-in-from-right-4">
-                  <div className="flex items-center justify-between mb-4">
-                     <h3 className="font-bold text-lg flex items-center gap-2">
-                       <Server className="w-5 h-5 text-blue-500" />
-                       {t.node} {selectedNode.label}
-                     </h3>
-                     <span className="text-xs px-2 py-1 bg-slate-200 text-slate-600 rounded">{t.seq}: {selectedNodeState.seqCounter}</span>
-                  </div>
-                  
-                  <button 
-                     onClick={() => sim.triggerLSP(selectedNode.id)}
-                     className="w-full mb-4 px-3 py-2 bg-blue-50 text-blue-600 rounded-md font-medium text-sm hover:bg-blue-100 transition"
-                  >
-                     {t.triggerLSP}
-                  </button>
+             ) : selectedNode && selectedNodeState ? (
+                <div key={`node-${selectedNode.id}`} className="py-2 px-3 animate-in fade-in slide-in-from-right-4">
+                   <div className="flex items-center justify-between mb-1">
+                      <h3 className="font-bold text-base flex items-center gap-2">
+                        <Server className="w-5 h-5 text-blue-500" />
+                        {t.node} {selectedNode.label}
+                      </h3>
+                      <span className="text-xs px-2 py-1 bg-slate-200 text-slate-600 rounded">{t.seq}: {selectedNodeState.seqCounter}</span>
+                   </div>
+                   
+                   <button 
+                      onClick={() => sim.triggerLSP(selectedNode.id)}
+                      className="w-full mb-1 px-2 py-1.5 bg-blue-50 text-blue-600 rounded-md font-medium text-sm hover:bg-blue-100 transition"
+                   >
+                      {t.triggerLSP}
+                   </button>
 
-                  <button 
-                     onClick={() => sim.clearRoutingTable([selectedNode.id])}
-                     className="w-full mb-4 px-3 py-2 bg-slate-100 text-slate-700 hover:text-slate-900 rounded-md font-medium text-sm hover:bg-slate-200 transition flex items-center justify-center gap-2"
-                  >
-                     <Eraser className="w-4 h-4" />
-                     {t.clearRoutingTable}
-                  </button>
+                   <button 
+                      onClick={() => sim.clearRoutingTable([selectedNode.id])}
+                      className="w-full mb-1 px-2 py-1.5 bg-slate-100 text-slate-700 hover:text-slate-900 rounded-md font-medium text-sm hover:bg-slate-200 transition flex items-center justify-center gap-2"
+                   >
+                      <Eraser className="w-4 h-4" />
+                      {t.clearRoutingTable}
+                   </button>
 
-                  <button 
-                     onClick={() => {
-                        sim.removeNode(selectedNode.id);
-                        setSelectedNodeIds([]);
-                     }}
-                     className="w-full mb-4 px-3 py-2 bg-red-100 text-red-700 rounded-md font-medium text-sm hover:bg-red-200 transition flex items-center justify-center gap-2"
-                  >
-                     <Eraser className="w-4 h-4" />
-                     {language === 'zh' ? '删除节点' : 'Delete Node'}
-                  </button>
+                   <button 
+                      onClick={() => {
+                         sim.removeNode(selectedNode.id);
+                         setSelectedNodeIds([]);
+                      }}
+                      className="w-full mb-1 px-2 py-1.5 bg-red-100 text-red-700 rounded-md font-medium text-sm hover:bg-red-200 transition flex items-center justify-center gap-2"
+                   >
+                      <Eraser className="w-4 h-4" />
+                      {language === 'zh' ? '删除节点' : 'Delete Node'}
+                   </button>
 
-                  <div className="mb-4 p-3 bg-white rounded border shadow-sm">
-                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">{language === 'zh' ? '定时触发 LSP' : 'Timer Trigger LSP'}</h4>
-                     <label className="flex items-center gap-2 cursor-pointer text-sm mb-2">
+                   <div className="mb-1 p-1.5 bg-white rounded border shadow-sm">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">{language === 'zh' ? '定时触发 LSP' : 'Timer Trigger LSP'}</h4>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm mb-1">
                         <input 
                           type="checkbox" 
                           checked={selectedNode.autoLspEnabled ?? false}
@@ -440,10 +514,10 @@ export default function App() {
                      </div>
                   </div>
 
-                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1 mt-4">
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1 mt-1">
                     <Play className="w-4 h-4" /> {language === 'zh' ? '发送测试数据' : 'Send Test Data'}
                   </h4>
-                  <div className="flex items-center gap-2 mb-4">
+                  <div className="flex items-center gap-2 mb-1">
                      <select 
                         className="flex-1 p-2 border rounded text-sm bg-slate-50"
                         value={dataDestId || ''}
@@ -465,7 +539,7 @@ export default function App() {
                      </button>
                   </div>
 
-                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
                     <Route className="w-4 h-4" /> {t.routingTable}
                   </h4>
                   
@@ -498,16 +572,16 @@ export default function App() {
                      </table>
                   </div>
                </div>
-            ) : selectedLink ? (
-               <div key={`link-${selectedLink.id}`} className="p-4 animate-in fade-in slide-in-from-right-4">
-                  <h3 className="font-bold text-lg flex items-center gap-2 mb-4">
-                     <Link2 className="w-5 h-5 text-blue-500" />
-                     {t.linkInterface}
-                  </h3>
-                  
-                  <div className="space-y-4">
-                     <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{t.status}</label>
+             ) : selectedLink ? (
+                <div key={`link-${selectedLink.id}`} className="py-2 px-3 animate-in fade-in slide-in-from-right-4">
+                   <h3 className="font-bold text-base flex items-center gap-2 mb-1">
+                      <Link2 className="w-5 h-5 text-blue-500" />
+                      {t.linkInterface}
+                   </h3>
+                   
+                   <div className="space-y-2">
+                      <div>
+                         <label className="text-xs font-bold text-slate-500 uppercase block mb-0.5">{t.status}</label>
                         <button 
                            onClick={() => sim.toggleLink(selectedLink.id)}
                            className={`w-full py-2 rounded-md font-medium text-sm transition ${selectedLink.up ? 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100' : 'bg-green-50 text-green-600 border border-green-200 hover:bg-green-100'}`}
@@ -518,7 +592,7 @@ export default function App() {
                      
                      {selectedLink.up && (
                          <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-2">{t.costMetric}</label>
+                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">{t.costMetric}</label>
                             <input 
                               type="number" min="1" max="100"
                               value={selectedLink.cost || ''}
@@ -532,7 +606,7 @@ export default function App() {
                          </div>
                      )}
 
-                     <div className="pt-4 border-t border-slate-200 mt-6">
+                      <div className="pt-1.5 border-t border-slate-200 mt-2">
                         <button 
                            onClick={() => {
                                sim.removeLink(selectedLink.id);
@@ -556,6 +630,20 @@ export default function App() {
       </div>
       
       <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
+      <ContextMenu
+        visible={contextMenu.visible}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        items={
+          contextMenu.type === 'node'
+            ? buildNodeMenu(t, language)
+            : contextMenu.type === 'link'
+            ? buildLinkMenu(t, language)
+            : buildBackgroundMenu(t, language)
+        }
+        onClose={handleCloseContextMenu}
+        onAction={handleMenuAction}
+      />
     </div>
   );
 }

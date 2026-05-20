@@ -39,7 +39,13 @@ export const translations = {
       "Adjust 'Base Network Delay' and 'Packet Loss Rate' to observe network convergence. You can see how Dijkstra ECMP handles packet drops and recalculates routes.",
       "The ECMP (Equal-Cost Multi-Path) algorithm ensures that multiple next hops are preserved in routing table if paths have identical minimal costs."
     ],
-    close: "Close"
+    close: "Close",
+    triggerAllLSPs: "Trigger All LSPs",
+    deleteNode: "Delete Node",
+    deleteLink: "Delete Link",
+    sendTestData: "Send Test Data",
+    addNodeHere: "Add Node Here",
+    clearAllRoutingTables: "Clear All Routing Tables"
   },
   zh: {
     title: "链路状态路由仿真",
@@ -81,7 +87,13 @@ export const translations = {
       "调整“基础网络延迟”和“丢包率”以观察网络收敛过程。你可以看到 Dijkstra 算法如何处理丢包并重新计算路由。",
       "ECMP (等价多路径) 算法确保最短路径代价相同时保留所有潜在的下一跳，以实现负载均衡。"
     ],
-    close: "关闭"
+    close: "关闭",
+    triggerAllLSPs: "全网触发 LSP",
+    deleteNode: "删除节点",
+    deleteLink: "删除链路",
+    sendTestData: "发送测试数据",
+    addNodeHere: "在此处添加节点",
+    clearAllRoutingTables: "清空所有路由表"
   }
 };
 
