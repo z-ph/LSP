@@ -37,9 +37,12 @@ export interface NodeState {
 
 export interface Packet {
   id: string; // unique
+  type: 'lsp' | 'data';
   from: NodeId;
   to: NodeId;
-  payload: LSP;
+  sourceNode?: NodeId; // original data source
+  destNode?: NodeId; // final data destination
+  payload?: any; // LSP
   progress: number; // 0.0 to 1.0
   totalTransitTime: number; // based on current delay + link cost
   failed: boolean; // if randomly dropped

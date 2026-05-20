@@ -107,6 +107,7 @@ export function useSimNetwork() {
       
       const packet: Packet = {
         id: Math.random().toString(36).substring(2, 11),
+        type: 'lsp',
         from: sendFrom,
         to: neighbor,
         payload: lsp,
@@ -129,7 +130,7 @@ export function useSimNetwork() {
     // Reconstruct full topology map from LSDB
     const topology: TopologyMap = {};
     
-    // First pass: add all node references
+    // First pass: add all node references from LSDB
     for (const orig in ns.lsdb) {
       if (!topology[orig]) topology[orig] = {};
       const lsp = ns.lsdb[orig];
@@ -138,6 +139,16 @@ export function useSimNetwork() {
          topology[orig][neighbor] = lsp.neighbors[neighbor];
       }
     }
+
+    // In real OSPF/IS-IS, a router always knows its own local interfaces and links,
+    // even before it has generated or flooded its own LSP. Inject its own active links.
+    if (!topology[nodeId]) topology[nodeId] = {};
+    const activeLinks = sr.links.filter(l => l.up && (l.source === nodeId || l.target === nodeId));
+    activeLinks.forEach(link => {
+       const neighborId = link.source === nodeId ? link.target : link.source;
+       topology[nodeId][neighborId] = link.cost;
+       if (!topology[neighborId]) topology[neighborId] = {}; 
+    });
     
     ns.routingTable = computeDijkstraECMP(nodeId, topology);
   };
@@ -187,18 +198,43 @@ export function useSimNetwork() {
           } else {
              p.progress += dt / p.totalTransitTime;
              if (p.progress >= 1.0) {
-               // Arrived! Processing LSP
-               const receiverState = sr.nodeStates[p.to];
-               if (receiverState) {
-                 const lsp = p.payload;
-                 const existingLsp = receiverState.lsdb[lsp.originator];
-                 
-                 // If LSP is newer
-                 if (!existingLsp || existingLsp.sequence < lsp.sequence) {
-                   receiverState.lsdb[lsp.originator] = lsp;
-                   recalculateRouting(p.to);
-                   floodLSP(p.to, lsp.originator, lsp, p.from);
-                   lsdbUpdated = true;
+               // Arrived!
+               if (p.type === 'data') {
+                 if (p.to !== p.destNode) {
+                    // Forward it
+                    const receiverState = sr.nodeStates[p.to];
+                    if (receiverState && p.destNode) {
+                       const route = receiverState.routingTable.find(r => r.destination === p.destNode);
+                       if (route && route.nextHops.length > 0) {
+                          const nextHop = route.nextHops[Math.floor(Math.random() * route.nextHops.length)];
+                          const isLost = Math.random() < sr.config.packetLossRatio;
+                          
+                          newPackets.push({
+                            ...p,
+                            id: Math.random().toString(36).substring(2, 11),
+                            from: p.to,
+                            to: nextHop,
+                            progress: 0,
+                            totalTransitTime: Math.max(100, sr.config.baseDelayMs) + (Math.random() * 100),
+                            failed: isLost
+                          });
+                       }
+                    }
+                 }
+               } else {
+                 // Processing LSP
+                 const receiverState = sr.nodeStates[p.to];
+                 if (receiverState) {
+                   const lsp = p.payload;
+                   const existingLsp = receiverState.lsdb[lsp.originator];
+                   
+                   // If LSP is newer
+                   if (!existingLsp || existingLsp.sequence < lsp.sequence) {
+                     receiverState.lsdb[lsp.originator] = lsp;
+                     recalculateRouting(p.to);
+                     floodLSP(p.to, lsp.originator, lsp, p.from);
+                     lsdbUpdated = true;
+                   }
                  }
                }
              } else {
@@ -245,9 +281,17 @@ export function useSimNetwork() {
     stateRef.current.links = newLinks;
     setLinks(newLinks);
     const link = newLinks.find(l => l.id === id);
-    if (stateRef.current.config.autoTriggerLspOnLinkChange && link && link.up) {
-      triggerLSP(link.source);
-      triggerLSP(link.target);
+    if (link) {
+        recalculateRouting(link.source);
+        recalculateRouting(link.target);
+        
+        if (stateRef.current.config.autoTriggerLspOnLinkChange && link.up) {
+          triggerLSP(link.source);
+          triggerLSP(link.target);
+        } else {
+          // ensure UI updates
+          setNodeStatesMirror({...stateRef.current.nodeStates});
+        }
     }
   };
 
@@ -262,9 +306,16 @@ export function useSimNetwork() {
     setLinks(newLinks);
     
     const affectedLink = newLinks.find(l => l.id === id);
-    if (stateRef.current.config.autoTriggerLspOnLinkChange && affectedLink) {
-       triggerLSP(affectedLink.source);
-       triggerLSP(affectedLink.target);
+    if (affectedLink) {
+        recalculateRouting(affectedLink.source);
+        recalculateRouting(affectedLink.target);
+        
+        if (stateRef.current.config.autoTriggerLspOnLinkChange) {
+           triggerLSP(affectedLink.source);
+           triggerLSP(affectedLink.target);
+        } else {
+           setNodeStatesMirror({...stateRef.current.nodeStates});
+        }
     }
   };
 
@@ -287,6 +338,57 @@ export function useSimNetwork() {
     triggerLSP(id);
   };
   
+  const removeNode = useCallback((nodeId: string) => {
+    const sr = stateRef.current;
+    
+    // Remove links connected to this node
+    const linksToRemove = sr.links.filter(l => l.source === nodeId || l.target === nodeId);
+    sr.links = sr.links.filter(l => l.source !== nodeId && l.target !== nodeId);
+    setLinks([...sr.links]);
+
+    // Remove node
+    sr.nodes = sr.nodes.filter(n => n.id !== nodeId);
+    setNodes([...sr.nodes]);
+    
+    // Remove state
+    delete sr.nodeStates[nodeId];
+    setNodeStatesMirror({...sr.nodeStates});
+
+    // Affected peers (were connected to the deleted node)
+    const affectedNodeIds = new Set<string>();
+    linksToRemove.forEach(l => {
+      if (l.source !== nodeId) affectedNodeIds.add(l.source);
+      if (l.target !== nodeId) affectedNodeIds.add(l.target);
+    });
+
+    // Notify neighbors explicitly and recalculate their routing
+    affectedNodeIds.forEach(id => {
+       recalculateRouting(id);
+       if (sr.config.autoTriggerLspOnLinkChange) {
+         triggerLSP(id);
+       }
+    });
+  }, []);
+
+  const removeLink = useCallback((linkId: string) => {
+    const sr = stateRef.current;
+    const link = sr.links.find(l => l.id === linkId);
+    if (!link) return;
+
+    sr.links = sr.links.filter(l => l.id !== linkId);
+    setLinks([...sr.links]);
+
+    recalculateRouting(link.source);
+    recalculateRouting(link.target);
+
+    if (sr.config.autoTriggerLspOnLinkChange) {
+       triggerLSP(link.source);
+       triggerLSP(link.target);
+    } else {
+       setNodeStatesMirror({...sr.nodeStates});
+    }
+  }, []);
+
   const addLink = (source: NodeId, target: NodeId, cost: number) => {
     const sr = stateRef.current;
     if (sr.links.find(l => (l.source === source && l.target === target) || (l.source === target && l.target === source))) {
@@ -297,13 +399,18 @@ export function useSimNetwork() {
     sr.links = [...sr.links, newLink];
     setLinks(sr.links);
     
+    recalculateRouting(source);
+    recalculateRouting(target);
+    
     if (sr.config.autoTriggerLspOnLinkChange) {
       triggerLSP(source);
       triggerLSP(target);
+    } else {
+      setNodeStatesMirror({...stateRef.current.nodeStates});
     }
   };
   
-  const initTopology = (initialNodes: PhysicalNode[], initialLinks: PhysicalLink[]) => {
+  const initTopology = (initialNodes: PhysicalNode[], initialLinks: PhysicalLink[], autoTriggerLsp: boolean = false) => {
       // Setup node states first
       stateRef.current.nodeStates = {};
       stateRef.current.packets = [];
@@ -321,16 +428,80 @@ export function useSimNetwork() {
       stateRef.current.links = initialLinks;
       setNodes(initialNodes);
       setLinks(initialLinks);
+      
+      // Compute initial routing tables based on active local links
+      initialNodes.forEach(n => {
+          recalculateRouting(n.id);
+      });
+      
       setNodeStatesMirror({...stateRef.current.nodeStates});
       
       // Let nodes generate initial LSPs
-      setTimeout(() => {
-          initialNodes.forEach(n => triggerLSP(n.id));
-      }, 100);
+      if (autoTriggerLsp) {
+        setTimeout(() => {
+            initialNodes.forEach(n => triggerLSP(n.id));
+        }, 100);
+      }
   };
+
+  const clearRoutingTable = useCallback((nodeIds?: string[]) => {
+    const sr = stateRef.current;
+    const targetIds = nodeIds && nodeIds.length > 0 ? nodeIds : sr.nodes.map(n => n.id);
+    targetIds.forEach(id => {
+      const ns = sr.nodeStates[id];
+      if (ns) {
+        ns.lsdb = {};
+        recalculateRouting(id);
+      }
+    });
+    setNodeStatesMirror({...sr.nodeStates});
+    setConvergenceStats(prev => ({...prev, isConverged: false}));
+  }, []);
+
+  const sendDataPacket = useCallback((sourceNodeId: NodeId, destNodeId: NodeId) => {
+    const sr = stateRef.current;
+    const ns = sr.nodeStates[sourceNodeId];
+    if (!ns || sourceNodeId === destNodeId) return;
+
+    // Look up routing table for next hop
+    const route = ns.routingTable.find(r => r.destination === destNodeId);
+    if (!route || route.nextHops.length === 0) {
+      console.log(`No route from ${sourceNodeId} to ${destNodeId}`);
+      return; // No route, cannot send
+    }
+
+    // Pick a next hop (ECMP randomly)
+    const nextHop = route.nextHops[Math.floor(Math.random() * route.nextHops.length)];
+    const maxDelay = Math.max(100, sr.config.baseDelayMs);
+    const isLost = Math.random() < sr.config.packetLossRatio;
+    
+    const packet: Packet = {
+      id: "data_" + Math.random().toString(36).substring(2, 11),
+      type: 'data',
+      from: sourceNodeId,
+      to: nextHop,
+      sourceNode: sourceNodeId,
+      destNode: destNodeId,
+      progress: 0,
+      totalTransitTime: maxDelay + (Math.random() * 100),
+      failed: isLost
+    };
+    
+    sr.packets.push(packet);
+    setPackets([...sr.packets]);
+  }, []);
 
   const updateNode = useCallback((id: string, updates: Partial<Omit<PhysicalNode, "id">>) => {
     const newNodes = stateRef.current.nodes.map(n => n.id === id ? { ...n, ...updates } : n);
+    stateRef.current.nodes = newNodes;
+    setNodes(newNodes);
+  }, []);
+
+  const updateNodes = useCallback((updates: {id: string, update: Partial<Omit<PhysicalNode, "id">>}[] ) => {
+    let newNodes = stateRef.current.nodes;
+    updates.forEach(({id, update}) => {
+      newNodes = newNodes.map(n => n.id === id ? { ...n, ...update } : n);
+    });
     stateRef.current.nodes = newNodes;
     setNodes(newNodes);
   }, []);
@@ -351,9 +522,14 @@ export function useSimNetwork() {
     toggleLink,
     updateNodePosition,
     updateNode,
+    updateNodes,
     addNode,
+    removeNode,
     addLink,
+    removeLink,
     initTopology,
-    triggerLSP
+    triggerLSP,
+    clearRoutingTable,
+    sendDataPacket
   };
 }

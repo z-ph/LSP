@@ -7,6 +7,7 @@ interface NetworkGraphProps {
   links: PhysicalLink[];
   packets: Packet[];
   onNodeMove: (id: string, x: number, y: number) => void;
+  onNodesMove?: (updates: {id: string, x: number, y: number}[]) => void;
   onNodeClick: (id: string, multi?: boolean) => void;
   onLinkClick: (id: string) => void;
   selectedNodeIds: string[];
@@ -19,6 +20,7 @@ export function NetworkGraph({
   links,
   packets,
   onNodeMove,
+  onNodesMove,
   onNodeClick,
   onLinkClick,
   selectedNodeIds,
@@ -29,7 +31,8 @@ export function NetworkGraph({
 
   // Simple drag implementation for nodes
   const [draggedNode, setDraggedNode] = useState<string | null>(null);
-  
+  const [hasDragged, setHasDragged] = useState(false);
+
   // Box selection implementation
   const [selectionBox, setSelectionBox] = useState<{ x1: number, y1: number, x2: number, y2: number } | null>(null);
 
@@ -77,7 +80,12 @@ export function NetworkGraph({
   const handlePointerDown = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
     setDraggedNode(id);
-    onNodeClick(id, e.ctrlKey || e.metaKey);
+    setHasDragged(false);
+    
+    if (!selectedNodeIds.includes(id) || e.ctrlKey || e.metaKey) {
+       onNodeClick(id, e.ctrlKey || e.metaKey);
+    }
+    
     (e.target as Element).setPointerCapture(e.pointerId);
   };
 
@@ -124,7 +132,24 @@ export function NetworkGraph({
     const gY = (y - transform.y) / transform.k;
 
     if (draggedNode) {
-      onNodeMove(draggedNode, gX, gY);
+      setHasDragged(true);
+      if (onNodesMove && selectedNodeIds.length > 1 && selectedNodeIds.includes(draggedNode)) {
+        const dNode = nodes.find(n => n.id === draggedNode);
+        if (dNode) {
+          const dx = gX - dNode.x;
+          const dy = gY - dNode.y;
+          const updates = selectedNodeIds.map(id => {
+            const n = nodes.find(nn => nn.id === id);
+            return n ? { id, x: n.x + dx, y: n.y + dy } : null;
+          }).filter(Boolean) as {id: string, x: number, y: number}[];
+          
+          if (updates.length > 0) {
+            onNodesMove(updates);
+          }
+        }
+      } else {
+        onNodeMove(draggedNode, gX, gY);
+      }
     } else if (selectionBox) {
       setSelectionBox(prev => prev ? { ...prev, x2: gX, y2: gY } : null);
     }
@@ -137,7 +162,11 @@ export function NetworkGraph({
         return;
     }
     if (draggedNode) {
+       if (!hasDragged && selectedNodeIds.includes(draggedNode) && !(e.ctrlKey || e.metaKey)) {
+           onNodeClick(draggedNode, false);
+       }
        setDraggedNode(null);
+       setHasDragged(false);
     } else if (selectionBox) {
        const minX = Math.min(selectionBox.x1, selectionBox.x2);
        const maxX = Math.max(selectionBox.x1, selectionBox.x2);
@@ -230,26 +259,44 @@ export function NetworkGraph({
 
         const curX = source.x + (target.x - source.x) * p.progress;
         const curY = source.y + (target.y - source.y) * p.progress;
+        const isData = p.type === 'data';
 
-        const originatorNode = nodes.find(n => n.id === p.payload.originator);
-        const originatorLabel = originatorNode ? originatorNode.label : p.payload.originator;
+        let labelText = "";
+        let color = p.failed ? "#ef4444" : "#10b981";
+        let labelColor = "#059669";
+        
+        if (isData) {
+            color = p.failed ? "#ef4444" : "#8b5cf6"; // purple for data
+            labelColor = "#6d28d9";
+            const sName = nodes.find(n => n.id === p.sourceNode)?.label || "Unknown";
+            const dName = nodes.find(n => n.id === p.destNode)?.label || "Unknown";
+            labelText = `Data(${sName}→${dName})`;
+        } else {
+            const originatorNode = nodes.find(n => n.id === p.payload?.originator);
+            const originatorLabel = originatorNode ? originatorNode.label : p.payload?.originator;
+            labelText = `LSP(${originatorLabel} #${p.payload?.sequence})`;
+        }
 
         return (
           <g key={p.id} transform={`translate(${curX}, ${curY})`} className="pointer-events-none">
             <circle
-              r={8}
-              fill={p.failed ? "#ef4444" : "#10b981"}
+              r={p.failed ? 6 : (isData ? 10 : 8)}
+              fill={color}
+              className={!p.failed ? (isData ? "animate-pulse shadow-xl" : "") : ""}
             />
+            {isData && !p.failed && (
+               <rect x="-4" y="-4" width="8" height="8" fill="#fff" className="animate-pulse opacity-80" />
+            )}
             {!p.failed && (
               <text
-                 y="-12"
+                 y={isData ? "-16" : "-12"}
                  textAnchor="middle"
-                 fontSize="12"
+                 fontSize={isData ? "13" : "12"}
                  fontWeight="bold"
-                 fill="#059669"
+                 fill={labelColor}
                  style={{ textShadow: '0 1px 2px white, 0 -1px 2px white, 1px 0 2px white, -1px 0 2px white' }}
               >
-                 LSP({originatorLabel} #{p.payload.sequence})
+                 {labelText}
               </text>
             )}
           </g>
