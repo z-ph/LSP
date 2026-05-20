@@ -13,6 +13,9 @@ interface NetworkGraphProps {
   selectedNodeIds: string[];
   selectedLinkId?: string;
   onSelectionBox?: (nodeIds: string[]) => void;
+  onNodeContextMenu?: (id: string, x: number, y: number) => void;
+  onBackgroundContextMenu?: (screenX: number, screenY: number, graphX: number, graphY: number) => void;
+  onLinkContextMenu?: (id: string, x: number, y: number) => void;
 }
 
 export function NetworkGraph({
@@ -25,7 +28,10 @@ export function NetworkGraph({
   onLinkClick,
   selectedNodeIds,
   selectedLinkId,
-  onSelectionBox
+  onSelectionBox,
+  onNodeContextMenu,
+  onBackgroundContextMenu,
+  onLinkContextMenu
 }: NetworkGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -78,6 +84,13 @@ export function NetworkGraph({
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent, id: string) => {
+    // Ignore right-click (context menu)
+    if (e.button === 2) {
+      e.stopPropagation();
+      e.preventDefault();
+      return;
+    }
+
     e.stopPropagation();
     setDraggedNode(id);
     setHasDragged(false);
@@ -89,8 +102,26 @@ export function NetworkGraph({
     (e.target as Element).setPointerCapture(e.pointerId);
   };
 
+  const getGraphCoordinates = (clientX: number, clientY: number) => {
+    const svg = svgRef.current;
+    if (!svg) return { gX: 0, gY: 0 };
+    const CTM = svg.getScreenCTM();
+    if (!CTM) return { gX: 0, gY: 0 };
+    const x = (clientX - CTM.e) / CTM.a;
+    const y = (clientY - CTM.f) / CTM.d;
+    const gX = (x - transform.x) / transform.k;
+    const gY = (y - transform.y) / transform.k;
+    return { gX, gY };
+  };
+
   const handleBackgroundPointerDown = (e: React.PointerEvent) => {
     if (e.target !== svgRef.current) return;
+    
+    // Ignore right-click (context menu)
+    if (e.button === 2) {
+      e.preventDefault();
+      return;
+    }
     
     if (e.ctrlKey || e.metaKey) {
       setIsPanning(true);
@@ -194,6 +225,13 @@ export function NetworkGraph({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerLeave={handlePointerUp}
+       onContextMenu={(e) => {
+         e.preventDefault();
+         if (onBackgroundContextMenu) {
+           const { gX, gY } = getGraphCoordinates(e.clientX, e.clientY);
+           onBackgroundContextMenu(e.clientX, e.clientY, gX, gY);
+         }
+       }}
       // removing click to avoid conflict with box selection
     >
       <defs>
@@ -223,7 +261,7 @@ export function NetworkGraph({
         const midY = (source.y + target.y) / 2;
 
         return (
-          <g key={link.id} onClick={(e) => { e.stopPropagation(); onLinkClick(link.id); }}>
+          <g key={link.id} onClick={(e) => { e.stopPropagation(); onLinkClick(link.id); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (onLinkContextMenu) { onLinkContextMenu(link.id, e.clientX, e.clientY); } }}>
             <line
               x1={source.x}
               y1={source.y}
@@ -313,6 +351,13 @@ export function NetworkGraph({
             transform={`translate(${node.x},${node.y})`}
             onPointerDown={(e) => handlePointerDown(e, node.id)}
             onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (onNodeContextMenu) {
+                onNodeContextMenu(node.id, e.clientX, e.clientY);
+              }
+            }}
             className="cursor-move"
           >
             <circle
